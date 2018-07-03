@@ -33,18 +33,24 @@ use strict;
 use warnings;
 use feature 'say';
 
-use Env qw($EDITOR $HOME);
+use Env qw($EDITOR $HOME $USER);
 use FindBin qw($Script);
 use Getopt::Long qw(:config gnu_getopt auto_version);
 use IPC::System::Simple qw(capture);
 
 my $vim = ($EDITOR eq 'nvim' ? 'nvim' : 'vim');
 
-sub _delete  { unlink $_[0]->{file} }
-sub _recover { system $vim, '-r', $_[0]->{file} }
+sub _delete  { unlink $_[0]->{fullpath} }
+sub _recover { system $vim, '-r', $_[0]->{fullpath} }
 sub _list    { 
-   my ($num, $file, $running, $owner) = @$_{qw(num file running owner)};
-   say $num, ': ', $file, " [by $owner]", ($running ? ' (running)' : '');
+   my ($num, $fullpath, $running, $owner) = @$_{qw(num fullpath running owner)};
+   say $num, ': ', $fullpath, " [by $owner]", ($running ? ' (running)' : '');
+}
+sub _cat {
+   my $tmp = "/tmp/.$USER.$$.tmp";
+   system $vim, '-r', $_[0]->{fullpath}, "+wq!$tmp";
+   system 'cat', $tmp;
+   unlink $tmp;
 }
 #sub _diff {
 #   system $vim, '-r', $_[0]->{file}, "+wq!test";
@@ -64,8 +70,9 @@ GetOptions(
    'vim'  => sub { $vim = 'vim' },
    'nvim' => sub { $vim = 'nvim' },
 
-   'delete'  => sub { $action = \&_delete },
+   'cat'     => sub { $action = \&_cat },
    'list'    => sub { $action = \&_list },
+   'delete'  => sub { $action = \&_delete },
    'recover' => sub { $action = \&_recover },
 
    'name=s'  => \$filter{file},
@@ -89,11 +96,11 @@ for (capture("$vim -r 2>&1")) {
    if (/^in directory\s+(.+):/i) {
       $dir = $1;
       $dir =~ s/~/$HOME/;
+      $dir =~ s/\/+/\//g;
    } elsif (/^(\d+)\.\s+(.*)/) {
-      %file = ( num => $1 );
-      my $f = "$dir/$2";
-      $f =~ s/\/+/\//g;
-      $file{file} = $f;
+      %file = ( dir => $dir, num => $1, file => $2 );
+      $file{file} =~ s/\/+/\//g;
+      $file{fullpath} = "$file{dir}$file{file}";
    } elsif (/^modified: (yes|no)/i) {
       $file{modified} = ($1 =~ /yes/i); 
    } elsif (/^owned by: (\w+) \s*dated: (.+)/) {
@@ -109,7 +116,7 @@ for (capture("$vim -r 2>&1")) {
 for (@files) {
    next if (
       ($_->{running} and not $filter{running})                               ||
-      (defined $filter{name}     and $_->{file}     !~ /$filter{name}/)      ||
+      (defined $filter{file}     and $_->{file}     !~ /$filter{file}/i)     ||
       (defined $filter{num}      and $_->{num}      !=  $filter{num})        ||
       (defined $filter{owner}    and $_->{owner}    ne  $filter{owner})      ||
       (defined $filter{modified} and $_->{modified} !=  $filter{modified})
@@ -179,6 +186,10 @@ Delete matching files
 =item B<--recover>
 
 Recover matching files in vim
+
+=item B<--cat>
+
+Recover matching files and write them to stdout
 
 =back
 
